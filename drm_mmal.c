@@ -53,6 +53,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <drm_mode.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+#include "libdrm/drm_fourcc.h"
 
 // New bits of DRM
 #define DRM_FORMAT_MOD_VENDOR_BROADCOM 0x07
@@ -60,36 +61,57 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define DRM_FORMAT_RESERVED         ((1ULL << 56) - 1)
 
-#define fourcc_mod_code(vendor, val) \
-   ((((__u64)DRM_FORMAT_MOD_VENDOR_## vendor) << 56) | (val & 0x00ffffffffffffffULL))
 /*
- * Some modifiers take parameters, for example the number of vertical GOBs in
- * a block. Reserve the lower 32 bits for modifiers, and the next 24 bits for
- * parameters. Top 8 bits are the vendor code.
+ * Some modifiers take parameters, for example the number of vertical
+ * lines in the image. Reserve the lower 32 bits for modifiers
+ * identification, and the next 24 bits for parameters. Top 8 bits are
+ * the vendor code.
  */
-#define __fourcc_mod_vc4_param_shift 32
-#define __fourcc_mod_vc4_param_bits 24
-#define fourcc_mod_vc4_code(val, params) \
-   fourcc_mod_code(NV, ((((__u64)params) << __fourcc_mod_vc4_param_shift) | val))
-#define fourcc_mod_vc4_mod(m) \
-   ((__u64)m & ((1ULL << __fourcc_mod_vc4_param_shift) - 1))
-#define param_from_vc4_mod(m) \
-   (((__u64)m >> __fourcc_mod_vc4_param_shift) & \
-          ((1ULL << __fourcc_mod_vc4_param_bits) - 1))
+#define __fourcc_mod_broadcom_param_shift 32
+#define __fourcc_mod_broadcom_param_bits 24
+#define fourcc_mod_broadcom_code(val, params) \
+	fourcc_mod_code(BROADCOM, ((((__u64)params) << __fourcc_mod_broadcom_param_shift) | val))
+#define fourcc_mod_broadcom_param(m) \
+	(((__u64)m >> __fourcc_mod_broadcom_param_shift) & \
+		((1ULL << __fourcc_mod_broadcom_param_bits) - 1))
+#define fourcc_mod_broadcom_mod(m) \
+	((m) & ~(((1ULL << __fourcc_mod_broadcom_param_shift) - 1) << \
+		 __fourcc_mod_broadcom_param_bits))
+
+/*
+ * Broadcom VC4 "T" format
+ *
+ * This is the primary layout that the V3D GPU can texture from (it
+ * can't do linear).  The T format has:
+ *
+ * - 64b utiles of pixels in a raster-order grid according to cpp.  It's 4x4
+ *   pixels at 32 bit depth.
+ *
+ * - 1k subtiles made of a 4x4 raster-order grid of 64b utiles (so usually
+ *   16x16 pixels).
+ *
+ * - 4k tiles made of a 2x2 grid of 1k subtiles (so usually 32x32 pixels).  On
+ *   even 4k tile rows, they're arranged as (BL, TL, TR, BR), and on odd rows
+ *   they're (TR, BR, BL, TL), where bottom left is start of memory.
+ *
+ * - an image made of 4k tiles in rows either left-to-right (even rows of 4k
+ *   tiles) or right-to-left (odd rows of 4k tiles).
+ */
+#define DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED fourcc_mod_code(BROADCOM, 1)
 
 /*
  * Broadcom SAND YUV4:2:0 format
  *
- * This is the native format that the H264 codec block uses. It is only valid
- * on DRM_FORMAT_NV21.
- * The image can be considered to be split into columns, and placing those
- * columns consecutively into memory.
- * The width of those columns can be either 32, 64, 128, or 256 pixels, but in
- * practice only 128 pixel columns are used.
+ * This is the native format that the H264 codec block uses.  For VC4
+ * HVS, it is only valid for H.264 (NV21) and RGBA modes.
+ *
+ * The image can be considered to be split into columns, and the
+ * columns are placed consecutively into memory.  The width of those
+ * columns can be either 32, 64, 128, or 256 pixels, but in practice
+ * only 128 pixel columns are used.
  *
  * The pitch between the start of each column is set to optimally switch
- * between SDRAM banks. This is passed as the number of additional lines of luma
- * required to achieve the correct value.
+ * between SDRAM banks. This is passed as the number of lines of column width.
  *
  * There are two layouts of the luma and chroma planes, either each column has:
  * - the luma, padding to a multiple of 16 lines, and then the chroma for that
@@ -101,11 +123,24 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  * blocks have a limit on the column stride.
  *
  */
-#define DRM_FORMAT_MOD_BROADCOM_VC4_SAND128 fourcc_mod_code(BROADCOM, 2)
 
-#define DRM_FORMAT_MOD_BROADCOM_VC4_SAND128_COL_HEIGHT(v) \
-      (fourcc_mod_code(BROADCOM, ((uint64_t)(v) << __fourcc_mod_vc4_param_shift)) | \
-              DRM_FORMAT_MOD_BROADCOM_VC4_SAND128)
+#define DRM_FORMAT_MOD_BROADCOM_SAND32_COL_HEIGHT(v) \
+	fourcc_mod_broadcom_code(2, v)
+#define DRM_FORMAT_MOD_BROADCOM_SAND64_COL_HEIGHT(v) \
+	fourcc_mod_broadcom_code(3, v)
+#define DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(v) \
+	fourcc_mod_broadcom_code(4, v)
+#define DRM_FORMAT_MOD_BROADCOM_SAND256_COL_HEIGHT(v) \
+	fourcc_mod_broadcom_code(5, v)
+
+#define DRM_FORMAT_MOD_BROADCOM_SAND32 \
+	DRM_FORMAT_MOD_BROADCOM_SAND32_COL_HEIGHT(0)
+#define DRM_FORMAT_MOD_BROADCOM_SAND64 \
+	DRM_FORMAT_MOD_BROADCOM_SAND64_COL_HEIGHT(0)
+#define DRM_FORMAT_MOD_BROADCOM_SAND128 \
+	DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(0)
+#define DRM_FORMAT_MOD_BROADCOM_SAND256 \
+	DRM_FORMAT_MOD_BROADCOM_SAND256_COL_HEIGHT(0)
 
 
 #include <interface/vcsm/user-vcsm.h>
@@ -400,8 +435,8 @@ void mmal_format_to_drm_pitches_offsets(uint32_t *pitches, uint32_t *offsets,
          break;
       case MMAL_ENCODING_YUVUV128:
          pitches[0] = format->es->video.width;    //Should be 128, but DRM rejects that.
-         modifiers[0] = DRM_FORMAT_MOD_BROADCOM_VC4_SAND128_COL_HEIGHT(get_sand_column_pitch(format->es->video.height));
-         printf("Modifier set as %llu, param %llu\n", modifiers[0], param_from_vc4_mod(modifiers[0]));
+         modifiers[0] = DRM_FORMAT_MOD_BROADCOM_SAND128_COL_HEIGHT(get_sand_column_pitch(format->es->video.height));
+         printf("Modifier set as %llu, param %llu\n", modifiers[0], fourcc_mod_broadcom_param(modifiers[0]));
          modifiers[1] = modifiers[0];
          pitches[1] = pitches[0];
 
